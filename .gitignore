@@ -12,6 +12,9 @@ frontend/.env
 dist/
 build/
 
+# Local databases & persistent user files
+backend/data/users.json
+
 # Logs
 *.log
 npm-debug.log*
