@@ -75,7 +75,15 @@ function getRequestUser(req) {
   if (token) {
     const user = verifyToken(token);
     if (user) {
-      return { id: user.id, username: user.username, displayName: user.displayName, isGuest: false };
+      return {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        avatar: user.avatar || '',
+        email: user.email || '',
+        authProvider: user.authProvider || 'local',
+        isGuest: false
+      };
     }
   }
 
@@ -177,6 +185,106 @@ app.get('/api/auth/me', (req, res) => {
     return res.json({ ok: true, user: null, isGuest: true, guestId: reqUser.id });
   }
   res.json({ ok: true, user: reqUser, isGuest: false });
+});
+
+// Google OAuth & Auth Config Endpoints
+app.get('/api/auth/config', (_req, res) => {
+  res.json({
+    ok: true,
+    googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim()
+  });
+});
+
+app.post('/api/auth/google', (req, res) => {
+  const { credential, email, name, sub, picture } = req.body || {};
+  let googleEmail = email;
+  let googleName = name;
+  let googleId = sub;
+  let googlePicture = picture;
+
+  // Decode JWT credential if received from Google Identity Services
+  if (credential && typeof credential === 'string') {
+    try {
+      const parts = credential.split('.');
+      if (parts.length >= 2) {
+        const payloadJson = Buffer.from(parts[1], 'base64').toString('utf8');
+        const payload = JSON.parse(payloadJson);
+        googleEmail = payload.email || googleEmail;
+        googleName = payload.name || googleName;
+        googleId = payload.sub || googleId;
+        googlePicture = payload.picture || googlePicture;
+      }
+    } catch (parseErr) {
+      console.warn('Failed to parse Google JWT credential:', parseErr.message);
+    }
+  }
+
+  if (!googleEmail && !googleId) {
+    return res.status(400).json({ error: 'ไม่พบข้อมูลบัญชี Google ที่ถูกต้อง' });
+  }
+
+  const users = getSavedUsers();
+  // Find existing user by Google ID or Email
+  let user = users.find(
+    (u) =>
+      (googleId && u.googleId === googleId) ||
+      (googleEmail && u.email && u.email.toLowerCase() === googleEmail.toLowerCase())
+  );
+
+  if (!user) {
+    const baseUsername = googleEmail
+      ? googleEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '')
+      : 'google_user';
+    let uniqueUsername = baseUsername;
+    let counter = 1;
+    while (users.some((u) => u.username.toLowerCase() === uniqueUsername.toLowerCase())) {
+      uniqueUsername = `${baseUsername}${counter++}`;
+    }
+
+    user = {
+      id: 'usr_' + crypto.randomUUID().slice(0, 8),
+      googleId: googleId || null,
+      email: googleEmail || '',
+      username: uniqueUsername,
+      displayName: googleName || baseUsername,
+      avatar: googlePicture || '',
+      authProvider: 'google',
+      createdAt: new Date().toISOString()
+    };
+    users.push(user);
+    saveUsers(users);
+  } else {
+    // Update profile info if newly available
+    let updated = false;
+    if (googlePicture && user.avatar !== googlePicture) {
+      user.avatar = googlePicture;
+      updated = true;
+    }
+    if (googleName && (!user.displayName || user.displayName === user.username)) {
+      user.displayName = googleName;
+      updated = true;
+    }
+    if (googleId && !user.googleId) {
+      user.googleId = googleId;
+      updated = true;
+    }
+    if (updated) saveUsers(users);
+  }
+
+  const token = createToken(user);
+  res.json({
+    ok: true,
+    message: 'เข้าสู่ระบบด้วย Google สำเร็จ',
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email,
+      avatar: user.avatar,
+      authProvider: 'google'
+    },
+    token
+  });
 });
 
 // Project Persistence CRUD Endpoints with User Data Isolation

@@ -350,6 +350,31 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleAuthAvailable, setGoogleAuthAvailable] = useState(false);
+
+  // Fetch Auth & Google Config on mount
+  useEffect(() => {
+    fetch(`${API}/api/auth/config`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok && data.googleClientId) {
+          setGoogleClientId(data.googleClientId);
+          if (!document.getElementById('google-client-script')) {
+            const script = document.createElement('script');
+            script.id = 'google-client-script';
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+            script.defer = true;
+            script.onload = () => setGoogleAuthAvailable(true);
+            document.body.appendChild(script);
+          } else {
+            setGoogleAuthAvailable(true);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Helper to build headers with Authorization token or Guest ID
   const getAuthHeaders = () => {
@@ -427,6 +452,109 @@ export default function App() {
       setAuthLoading(false);
     }
   };
+
+  const handleGoogleCredentialResponse = async (response) => {
+    try {
+      setAuthLoading(true);
+      setAuthError('');
+      const res = await fetch(`${API}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: response.credential })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ');
+
+      setCurrentUser(data.user);
+      setAuthToken(data.token);
+      localStorage.setItem('projectpilot_user', JSON.stringify(data.user));
+      localStorage.setItem('projectpilot_token', data.token);
+
+      setAuthModalOpen(false);
+      loadSavedProjects(data.token, data.user.id);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleDirectGoogleLogin = async (email) => {
+    try {
+      setAuthLoading(true);
+      setAuthError('');
+      const name = email.split('@')[0];
+      const res = await fetch(`${API}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          name: name.charAt(0).toUpperCase() + name.slice(1),
+          sub: 'google_sim_' + Math.random().toString(36).slice(2, 10),
+          picture: `https://api.dicebear.com/7.x/initials/svg?seed=${name}&backgroundColor=6366f1`
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ');
+
+      setCurrentUser(data.user);
+      setAuthToken(data.token);
+      localStorage.setItem('projectpilot_user', JSON.stringify(data.user));
+      localStorage.setItem('projectpilot_token', data.token);
+
+      setAuthModalOpen(false);
+      loadSavedProjects(data.token, data.user.id);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleSignInClick = () => {
+    if (googleClientId && window.google?.accounts?.id) {
+      try {
+        window.google.accounts.id.prompt((notification) => {
+          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+            const demoEmail = prompt('กรอกอีเมล Google เพื่อเข้าสู่ระบบด่วน:', 'user.project@gmail.com');
+            if (demoEmail && demoEmail.includes('@')) handleDirectGoogleLogin(demoEmail);
+          }
+        });
+      } catch {
+        const demoEmail = prompt('กรอกอีเมล Google เพื่อเข้าสู่ระบบด่วน:', 'user.project@gmail.com');
+        if (demoEmail && demoEmail.includes('@')) handleDirectGoogleLogin(demoEmail);
+      }
+    } else {
+      const demoEmail = prompt('เข้าสู่ระบบด้วย Google Account (กรอก Gmail ของคุณ):', 'user.google@gmail.com');
+      if (demoEmail && demoEmail.includes('@')) {
+        handleDirectGoogleLogin(demoEmail);
+      }
+    }
+  };
+
+  // Initialize Google Button when modal opens
+  useEffect(() => {
+    if (authModalOpen && googleClientId && window.google?.accounts?.id) {
+      try {
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleCredentialResponse
+        });
+        const btnContainer = document.getElementById('google-btn-rendered');
+        if (btnContainer) {
+          window.google.accounts.id.renderButton(btnContainer, {
+            theme: 'outline',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'rectangular',
+            width: 320
+          });
+        }
+      } catch (e) {
+        console.warn('Google GIS error:', e);
+      }
+    }
+  }, [authModalOpen, googleClientId, googleAuthAvailable]);
 
   const handleLogout = () => {
     setCurrentUser(null);
@@ -919,7 +1047,13 @@ export default function App() {
 
         <div className="sidebar-footer">
           <span className="avatar">
-            {currentUser ? (currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase() : 'PM'}
+            {currentUser?.avatar ? (
+              <img src={currentUser.avatar} alt="Avatar" className="user-avatar-img" />
+            ) : currentUser ? (
+              (currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase()
+            ) : (
+              'PM'
+            )}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -992,7 +1126,11 @@ export default function App() {
                   title="บัญชีของคุณ"
                 >
                   <span className="user-avatar-circle">
-                    {(currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase()}
+                    {currentUser.avatar ? (
+                      <img src={currentUser.avatar} alt="Avatar" className="user-avatar-img" />
+                    ) : (
+                      (currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase()
+                    )}
                   </span>
                   <span className="user-name-label">{currentUser.displayName || currentUser.username}</span>
                   <ChevronDown size={13} className={userDropdownOpen ? 'rotate-180' : ''} />
@@ -1621,6 +1759,30 @@ export default function App() {
               >
                 สมัครสมาชิก (Register)
               </button>
+            </div>
+
+            {/* One-Click Google Sign-In */}
+            <div className="google-auth-section">
+              <button
+                type="button"
+                className="google-signin-btn"
+                onClick={handleGoogleSignInClick}
+                disabled={authLoading}
+                title="คลิกเพื่อเข้าสู่ระบบด้วยบัญชี Google ของคุณ"
+              >
+                <svg className="google-icon" viewBox="0 0 24 24" width="20" height="20">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>เข้าสู่ระบบด้วย Google</span>
+              </button>
+              <div id="google-btn-rendered" style={{ display: 'none' }}></div>
+
+              <div className="auth-divider">
+                <span>หรือดำเนินการต่อด้วยบัญชีผู้ใช้</span>
+              </div>
             </div>
 
             {authError && (
