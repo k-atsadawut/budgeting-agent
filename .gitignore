@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables & Secrets (ห้ามนำคีย์ลับขึ้น Git)
+.env
+.env.local
+backend/.env
+frontend/.env
+
+# Production Build outputs
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary extraction files
+_extracted_starter/

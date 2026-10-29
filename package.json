@@ -1,0 +1,13 @@
+{
+  "name": "budgeting-agent-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Universal Project Analyzer & Smart Budgeting Agent",
+  "scripts": {
+    "build": "npm --prefix frontend install && npm --prefix frontend run build && npm --prefix backend install",
+    "start": "npm --prefix backend start",
+    "dev": "npm --prefix backend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev"
+  }
+}

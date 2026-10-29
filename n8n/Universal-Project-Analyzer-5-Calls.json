@@ -1,0 +1,789 @@
+{
+  "name": "Universal Project Analyzer & Smart Budgeting Agent - 5 Calls",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "988d4049-298f-4544-a0a3-b4560672c05c",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        3648,
+        -592
+      ],
+      "webhookId": "f78ba702-3e12-47ad-960c-e8c239ae57a9",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=คุณคือ Project Intake Analyst สแกนโจทย์โครงการด้านล่างแล้วสกัดข้อมูล\n\nโจทย์จากผู้ใช้:\n{{ $json.chatInput }}\n\nตอบตามรูปแบบนี้เท่านั้น 7 บรรทัด ห้ามมีข้อความอื่น ห้ามใช้ Markdown:\nPROJECT_TYPE: เลือก 1 ค่าจาก IT, EVENT, CREATIVE\n(IT = Hardware/Software/IoT/ซอฟต์แวร์ที่มีอุปกรณ์เกี่ยวข้อง, EVENT = อีเวนต์/ค่ายอาสา/ก่อสร้าง/งานที่มีวันงานตายตัว, CREATIVE = ซอฟต์แวร์ล้วน/การตลาด/ครีเอทีฟ/งานบริการ)\nPROJECT_NAME: ชื่อโครงการสั้นๆ\nGOAL: เป้าหมายหลัก 1 ประโยค\nBUDGET_THB: ตัวเลขงบประมาณเป็นบาท (ตัวเลขล้วน) ถ้าผู้ใช้ไม่ได้ระบุให้ตอบ NONE\nDEADLINE: วันส่งมอบหรือกรอบเวลา ถ้าไม่ได้ระบุให้ตอบ NONE\nMISSING: ข้อมูลสำคัญที่ยังขาด คั่นด้วย ; ถ้าครบให้ตอบ NONE\nQUESTIONS: คำถามยืนยัน 3-4 ข้อ คั่นด้วย | ถ้าไม่จำเป็นให้ตอบ NONE\n\nห้ามเดาตัวเลขที่ผู้ใช้ไม่ได้บอก"
+      },
+      "id": "6fe0b405-6c2f-49ee-9a85-ac02bc37d66d",
+      "name": "Stage 1 - Intake & Profiling",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        3920,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "78bcf40a-8844-42ff-a741-6a671035c4ad",
+      "name": "Gemini - Intake",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        -368
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "0FT1D4Y5l9Cp1KgU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $json.text || '';\nconst get = (k) => { const m = raw.match(new RegExp('^\\\\s*' + k + '\\\\s*:\\\\s*(.*)$', 'mi')); return m ? m[1].trim() : ''; };\nconst none = (v) => !v || /^(none|null|n\\/a|-)$/i.test(v);\nlet type = get('PROJECT_TYPE').toUpperCase();\nif (!['IT', 'EVENT', 'CREATIVE'].includes(type)) type = 'IT';\nconst budgetRaw = get('BUDGET_THB').replace(/[, ]/g, '');\nconst budget = none(budgetRaw) ? null : Number(budgetRaw.replace(/[^0-9.]/g, ''));\nconst hasBudget = budget !== null && !isNaN(budget) && budget > 0;\nconst deadline = none(get('DEADLINE')) ? null : get('DEADLINE');\nconst missing = none(get('MISSING')) ? [] : get('MISSING').split(';').map(s => s.trim()).filter(Boolean);\nconst questions = none(get('QUESTIONS')) ? [] : get('QUESTIONS').split('|').map(s => s.trim()).filter(Boolean);\nconst PENDING = '[รอระบุ / Pending Confirmation]';\nreturn { json: {\n  brief: $('Chat Trigger').first().json.chatInput,\n  project_name: get('PROJECT_NAME') || 'โครงการไม่ระบุชื่อ',\n  goal: get('GOAL') || PENDING,\n  project_type: type,\n  has_budget: hasBudget,\n  budget_thb: hasBudget ? budget : PENDING,\n  deadline: deadline || PENDING,\n  missing,\n  questions\n} };"
+      },
+      "id": "301d11c8-45bb-4efc-b371-b417dceab41f",
+      "name": "Parse Intake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "c1",
+                    "leftValue": "={{ $json.project_type }}",
+                    "rightValue": "IT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "IT / Hardware / IoT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "c2",
+                    "leftValue": "={{ $json.project_type }}",
+                    "rightValue": "EVENT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Event / Construction"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "id": "c3",
+                    "leftValue": "={{ $json.project_type }}",
+                    "rightValue": "CREATIVE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Marketing / Creative"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cfb53d79-b479-4994-852a-7a4010d0bf8b",
+      "name": "Select Framework",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        4512,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "framework_mode",
+              "value": "Bimodal (Waterfall สำหรับสั่งของ/ประกอบฮาร์ดแวร์ + Agile สำหรับพัฒนาโค้ด)",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "vocab_style",
+              "value": "ใช้ศัพท์เทคนิคได้ (API, BOM, Cloud, Security)",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "41d389c6-f5d0-4f35-a17b-9179adce47cc",
+      "name": "Mode - Bimodal",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4768,
+        -768
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b299cf25-53f9-4a73-81f1-2203e14204f4",
+      "name": "Project Context",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5040,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ข้อมูลโครงการ:\n- ชื่อโครงการ: {{ $('Project Context').first().json.project_name }}\n- เป้าหมาย: {{ $('Project Context').first().json.goal }}\n- โจทย์เดิมของผู้ใช้: {{ $('Project Context').first().json.brief }}\n- งบประมาณตั้งต้น (บาท): {{ $('Project Context').first().json.budget_thb }}\n- วันส่งมอบ: {{ $('Project Context').first().json.deadline }}\n- Framework ที่เลือก: {{ $('Project Context').first().json.framework_mode }}\n- สไตล์ภาษา: {{ $('Project Context').first().json.vocab_style }}\n\nคุณคือ Senior Project Manager ทำเอกสาร Stage 2 ให้ครบ 3 ส่วน:\n\n1) Project Charter: วัตถุประสงค์, ขอบเขต In Scope / Out of Scope, กลุ่มเป้าหมาย, ข้อจำกัด\n2) WBS 3 ระดับ (Phase -> Task -> Sub-task) เป็นตาราง คอลัมน์: Phase | Task | Sub-task | Owner | Dependency | ระยะเวลา (Day 1, Day 2...) | Deliverable\n   ให้ใช้โครงสร้างงานให้เหมาะกับ Framework ที่เลือก\n3) Test Plan / เกณฑ์ตรวจรับ (Acceptance Criteria) เป็นตาราง คอลัมน์: ID | รายการทดสอบ | เกณฑ์ผ่าน | หลักฐานที่ต้องเก็บ | สถานะ (ตั้งเป็น Not Run ทุกข้อ)\n\nกฎเหล็ก:\n1) ห้ามแต่งตัวเลขข้อเท็จจริง (ราคา วันที่ งบ จำนวนคน) ที่ผู้ใช้ไม่ได้ให้ ถ้าไม่ทราบให้ใส่ [รอระบุ]\n2) ห้ามใส่ API Token / รหัสผ่าน / Secrets ในเอกสาร\n3) ผลการทดสอบทุกข้อเริ่มต้นเป็น Not Run และต้องระบุหลักฐานที่ต้องเก็บ\n4) ห้ามประกาศว่า \"เสร็จสมบูรณ์ / พร้อมใช้งาน\" ถ้ายังไม่ได้รัน Test สำคัญ\n5) ตอบเป็นภาษาไทย จัดรูปแบบ Markdown และใช้ตารางเมื่อเหมาะสม\n"
+      },
+      "id": "520e4a61-540a-4d68-b4d2-c756a21c4426",
+      "name": "Stage 2 - WBS & Test Plan",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        5296,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "67546658-9c56-4184-afa0-759a6e308458",
+      "name": "Gemini - WBS",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        5296,
+        -368
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "0FT1D4Y5l9Cp1KgU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "b1",
+              "leftValue": "={{ $('Project Context').first().json.has_budget }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e917188b-ebc4-4956-91d1-c90ca5ea83a4",
+      "name": "Has Budget?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5552,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "budget_method",
+              "value": "Top-Down",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "budget_instruction",
+              "value": "ผู้ใช้ให้งบตั้งต้นมาแล้ว ให้แบ่งสัดส่วน (%) ตามหมวดงานให้รวมไม่เกินงบ และกันงบสำรอง 10-15% ไว้ก่อน",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "fc7eb3e5-b651-4449-a616-607dd693b3cd",
+      "name": "Budget - Top-Down",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5808,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ข้อมูลโครงการ:\n- ชื่อโครงการ: {{ $('Project Context').first().json.project_name }}\n- เป้าหมาย: {{ $('Project Context').first().json.goal }}\n- โจทย์เดิมของผู้ใช้: {{ $('Project Context').first().json.brief }}\n- งบประมาณตั้งต้น (บาท): {{ $('Project Context').first().json.budget_thb }}\n- วันส่งมอบ: {{ $('Project Context').first().json.deadline }}\n- Framework ที่เลือก: {{ $('Project Context').first().json.framework_mode }}\n- สไตล์ภาษา: {{ $('Project Context').first().json.vocab_style }}\n\nแผนงาน (WBS) ที่ได้จาก Stage 2:\n{{ $('Stage 2 - WBS & Test Plan').first().json.text }}\n\nวิธีจัดงบ: {{ $json.budget_method }}\nคำสั่ง: {{ $json.budget_instruction }}\n\nคุณคือ Smart Budgeting Engine ทำเอกสารงบประมาณ:\n1) ตารางรายการต้นทุน คอลัมน์: หมวด | รายการ | ประเภท (CapEx / OpEx / Reserve) | จำนวน | ราคาต่อหน่วย | รวม\n2) สรุปแยก CapEx (ซื้อขาด/อุปกรณ์/มัดจำ), OpEx (ผันแปร/รายเดือน/ค่าแรง) และ Contingency Buffer 10-15% ผูกกับระดับความเสี่ยง\n3) จำลอง 3 แพ็กเกจ: แผนประหยัด (Lean / MVP), แผนมาตรฐาน (Standard), แผนจัดเต็ม (Premium) พร้อมสิ่งที่ได้และสิ่งที่ตัดออกของแต่ละแผน\nตัวเลขที่ไม่มีข้อมูลรองรับให้ใช้ [รอระบุ]\n\nกฎเหล็ก:\n1) ห้ามแต่งตัวเลขข้อเท็จจริง (ราคา วันที่ งบ จำนวนคน) ที่ผู้ใช้ไม่ได้ให้ ถ้าไม่ทราบให้ใส่ [รอระบุ]\n2) ห้ามใส่ API Token / รหัสผ่าน / Secrets ในเอกสาร\n3) ผลการทดสอบทุกข้อเริ่มต้นเป็น Not Run และต้องระบุหลักฐานที่ต้องเก็บ\n4) ห้ามประกาศว่า \"เสร็จสมบูรณ์ / พร้อมใช้งาน\" ถ้ายังไม่ได้รัน Test สำคัญ\n5) ตอบเป็นภาษาไทย จัดรูปแบบ Markdown และใช้ตารางเมื่อเหมาะสม\n"
+      },
+      "id": "61603482-825a-4b95-8981-268c7cb72c87",
+      "name": "Stage 3 - Smart Budget",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        6080,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "dd727b36-c229-40b6-9f05-9cd5bba6bfbe",
+      "name": "Gemini - Budget",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        6080,
+        -368
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "0FT1D4Y5l9Cp1KgU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ข้อมูลโครงการ:\n- ชื่อโครงการ: {{ $('Project Context').first().json.project_name }}\n- เป้าหมาย: {{ $('Project Context').first().json.goal }}\n- โจทย์เดิมของผู้ใช้: {{ $('Project Context').first().json.brief }}\n- งบประมาณตั้งต้น (บาท): {{ $('Project Context').first().json.budget_thb }}\n- วันส่งมอบ: {{ $('Project Context').first().json.deadline }}\n- Framework ที่เลือก: {{ $('Project Context').first().json.framework_mode }}\n- สไตล์ภาษา: {{ $('Project Context').first().json.vocab_style }}\n\nแผนงาน (WBS):\n{{ $('Stage 2 - WBS & Test Plan').first().json.text }}\n\nแผนงบประมาณ:\n{{ $('Stage 3 - Smart Budget').first().json.text }}\n\nทำเอกสาร Stage 4: Risk, Issue & Change Control\n1) Risk Register เป็นตาราง: ความเสี่ยง | Likelihood (1-5) | Impact (1-5) | คะแนน (L x I) | สัญญาณเตือนล่วงหน้า | แผนสำรอง | ผลต่องบ/เวลา (Risk-to-Budget)\n2) ขั้นตอน Change Request: แม่แบบ CR + วิเคราะห์ผลกระทบสามเหลี่ยมเหล็ก (เวลา vs งบประมาณ vs คุณภาพ) + ทางเลือก Trade-off อย่างน้อย 2 ทาง + ต้องได้รับ Sign-off ก่อนเริ่มงาน\n3) ขั้นตอน Root Cause Analysis เมื่อพบปัญหาเทคนิค: แยก \"ข้อเท็จจริง\" ออกจาก \"สมมติฐาน\", Log/หลักฐานที่ต้องเก็บ, ขั้นตอนแยกส่วนปัญหา\n\nกฎเหล็ก:\n1) ห้ามแต่งตัวเลขข้อเท็จจริง (ราคา วันที่ งบ จำนวนคน) ที่ผู้ใช้ไม่ได้ให้ ถ้าไม่ทราบให้ใส่ [รอระบุ]\n2) ห้ามใส่ API Token / รหัสผ่าน / Secrets ในเอกสาร\n3) ผลการทดสอบทุกข้อเริ่มต้นเป็น Not Run และต้องระบุหลักฐานที่ต้องเก็บ\n4) ห้ามประกาศว่า \"เสร็จสมบูรณ์ / พร้อมใช้งาน\" ถ้ายังไม่ได้รัน Test สำคัญ\n5) ตอบเป็นภาษาไทย จัดรูปแบบ Markdown และใช้ตารางเมื่อเหมาะสม\n"
+      },
+      "id": "559e5221-6de4-479d-b41c-8905d739a1ca",
+      "name": "Stage 4 - Risk & Change Control",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        6336,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "5e80d88e-5fa8-43d9-81eb-0272168221ad",
+      "name": "Gemini - Risk",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        6336,
+        -368
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "0FT1D4Y5l9Cp1KgU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=คุณคือ Senior Project Reporting Analyst ให้สร้างรายงานครบทั้ง 4 ส่วนในคำตอบเดียว โดยใช้ข้อมูลโครงการและเอกสารจาก Stage 2–4 ด้านล่าง\n\nข้อมูลโครงการ:\n- ชื่อโครงการ: {{ $('Project Context').first().json.project_name }}\n- เป้าหมาย: {{ $('Project Context').first().json.goal }}\n- โจทย์เดิมของผู้ใช้: {{ $('Project Context').first().json.brief }}\n- งบประมาณตั้งต้น (บาท): {{ $('Project Context').first().json.budget_thb }}\n- วันส่งมอบ: {{ $('Project Context').first().json.deadline }}\n- Framework: {{ $('Project Context').first().json.framework_mode }}\n\nStage 2 — Charter, WBS และ Test Plan:\n{{ $('Stage 2 - WBS & Test Plan').first().json.text }}\n\nStage 3 — Smart Budget:\n{{ $('Stage 3 - Smart Budget').first().json.text }}\n\nStage 4 — Risk & Change Control:\n{{ $('Stage 4 - Risk & Change Control').first().json.text }}\n\nสร้างเอกสารภาษาไทย Markdown โดยต้องมีหัวข้อครบ 4 ส่วนดังต่อไปนี้:\n\n## 1) Operational Status Report\n- สถานะรวมเริ่มต้นเป็น ⚪ ยังไม่เริ่ม พร้อมเกณฑ์เปลี่ยนเป็น Green / Amber / Red\n- แยก Done / In Progress / Blocked / Next Steps โดยอ้างอิง WBS\n- ตาราง Defect/Issue ค้าง พร้อมหลักฐานที่ต้องเก็บ\n\n## 2) Financial & Burn Rate Report\n- ตาราง Planned Budget vs Actual Spend โดย Actual ให้เป็น [รอระบุ] หากไม่มีข้อมูล\n- สถานะการใช้งบสำรอง (Contingency Usage)\n- สูตรคำนวณ Burn Rate และเกณฑ์เตือน Overbudget\n\n## 3) Quality & Verification Report\n- สรุป Test Cases เป็น Pass / Fail / Not Run โดยเริ่มทุกข้อเป็น Not Run\n- ตารางความครบถ้วนของหลักฐาน (Logs / รูปภาพ / ใบเสร็จ)\n- เงื่อนไขที่ต้องผ่านก่อนประกาศว่าโครงการเสร็จ\n\n## 4) Executive Summary\n- สรุปเป้าหมาย สถานะ และความเสี่ยงสูงสุด\n- ประเด็นที่ต้องตัดสินใจ (Decision Needed)\n- Bullet กระชับ พร้อมนำไปทำสไลด์ต่อได้\n- ปิดท้ายด้วยคำถามที่ต้องยืนยัน 3 ข้อ\n\nกฎสำคัญ:\n1. ห้ามแต่งตัวเลข ราคา วันที่ งบประมาณ หรือจำนวนคนที่ผู้ใช้ไม่ได้ให้ หากไม่ทราบให้ระบุ [รอระบุ]\n2. ห้ามใส่ API Token รหัสผ่าน หรือ Secrets\n3. ห้ามระบุว่างานเสร็จหรือพร้อมใช้งาน หากยังไม่มีผลทดสอบยืนยัน\n4. หลีกเลี่ยงการคัดลอกข้อมูล Stage 2–4 ซ้ำทั้งก้อน ให้สรุปและอ้างอิงเฉพาะสาระที่จำเป็น\n5. ต้องมีรายงานครบทั้ง 4 หัวข้อในคำตอบเดียว"
+      },
+      "id": "026f2152-a411-4249-8ee6-ee31f7b47174",
+      "name": "Stage 5 - Complete Reports",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        6800,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3-flash-preview",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "f16a9a9a-fd8f-4b8d-b6f8-a8a90a25eb6e",
+      "name": "Gemini - Complete Reports",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        6944,
+        -528
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "0FT1D4Y5l9Cp1KgU",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "budget_method",
+              "value": "Bottom-Up",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "budget_instruction",
+              "value": "ผู้ใช้ไม่ได้ให้งบ ให้ถอดรายการทรัพยากรจาก WBS เป็น BOM / Cost Sheet โดยช่องราคาต่อหน่วยให้ใส่ [รอระบุ] ห้ามเดาราคา แล้วสรุปว่าต้องรู้ข้อมูลใดจึงจะประเมินงบรวมได้",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "5df5997f-6583-4887-a037-1d522615037e",
+      "name": "Budget - Bottom-Up",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5808,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "framework_mode",
+              "value": "Waterfall / Milestone-Driven (วางแผนย้อนกลับจากวันงานจริง)",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "vocab_style",
+              "value": "ใช้ภาษาทั่วไปแบบการบริหารจัดการ เข้าใจง่าย",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "7e86e3ad-6d71-4ce5-879f-7b02fdbe4cc1",
+      "name": "Mode - Waterfall",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4768,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "framework_mode",
+              "value": "Agile / Kanban (ซอยงานสั้นๆ ปรับตาม Feedback)",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "vocab_style",
+              "value": "ใช้ภาษาธุรกิจและการสื่อสาร",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "fe243e53-20c0-4a59-ace6-37da4ea32ddb",
+      "name": "Mode - Agile",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4768,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Universal Project Analyzer\n1. กดที่โหนด Gemini ทุกตัว แล้วเลือก Credential (Google Gemini API)\n2. กด Open chat แล้วพิมพ์โจทย์โครงการ\n3. ผลลัพธ์จะตอบกลับในแชทเป็น Markdown\n\nเปลี่ยนโมเดลได้ที่โหนด Gemini แต่ละตัว\n\n## Performance Optimization\n- ปรับ Prompt ของ Report 1-4 ให้รับเฉพาะเอกสารที่จำเป็น ลดการส่งข้อมูลซ้ำ\n- Report 4 ใช้เฉพาะส่วนต้นของเอกสารอ้างอิงเพื่อลด Token\n- โครงสร้างรายงานทั้ง 4 ส่วนและ Assemble Final Report ยังคงเดิม",
+        "height": 220,
+        "width": 380
+      },
+      "id": "b6580cb9-dff7-4d5a-b511-f8fe1104fe82",
+      "name": "Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3648,
+        -832
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Project Context').first().json;\n\nconst getText = (nodeName) => {\n  try {\n    const value = $(nodeName).first().json;\n    return value.output ?? value.text ?? value.report ?? '(ไม่มีข้อมูลจากโหนดนี้)';\n  } catch (error) {\n    return '(ไม่พบข้อมูลจากโหนด ' + nodeName + ')';\n  }\n};\n\nconst sections = [];\nsections.push('# ' + (ctx.project_name || 'รายงานวิเคราะห์โครงการ'));\nsections.push('> Framework: ' + (ctx.framework_mode || '[รอระบุ]'));\n\nif ((ctx.questions && ctx.questions.length) || (ctx.missing && ctx.missing.length)) {\n  let pending = '## ⚠️ ข้อมูลที่ต้องยืนยัน (Pending Confirmation)';\n  (ctx.missing || []).forEach((item) => {\n    pending += '\\n- ขาด: ' + item;\n  });\n  (ctx.questions || []).forEach((question, index) => {\n    pending += '\\n' + (index + 1) + '. ' + question;\n  });\n  sections.push(pending);\n}\n\nsections.push(\n  '## Stage 2: Charter, WBS และ Test Plan\\n\\n' +\n  getText('Stage 2 - WBS & Test Plan')\n);\nsections.push(\n  '## Stage 3: งบประมาณ (' + (ctx.has_budget ? 'Top-Down' : 'Bottom-Up') + ')\\n\\n' +\n  getText('Stage 3 - Smart Budget')\n);\nsections.push(\n  '## Stage 4: ความเสี่ยงและ Change Control\\n\\n' +\n  getText('Stage 4 - Risk & Change Control')\n);\nsections.push(\n  '## รายงานสรุปสำหรับผู้บริหาร\\n\\n' +\n  getText('Stage 5 - Complete Reports')\n);\n\nconst finalReport = sections.join('\\n\\n---\\n\\n').trim();\n\nif (!finalReport) {\n  throw new Error('ไม่สามารถสร้างรายงานตอบกลับได้: finalReport ว่าง');\n}\n\n// n8n Chat Trigger can return the final text from the output field.\nreturn [{ json: { output: finalReport, text: finalReport } }];\n"
+      },
+      "id": "509ba1ab-0027-4ac7-bd05-e4439bae25c6",
+      "name": "Assemble Final Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7840,
+        -416
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Stage 1 - Intake & Profiling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 1 - Intake & Profiling": {
+      "main": [
+        [
+          {
+            "node": "Parse Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Intake": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stage 1 - Intake & Profiling",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intake": {
+      "main": [
+        [
+          {
+            "node": "Select Framework",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Framework": {
+      "main": [
+        [
+          {
+            "node": "Mode - Bimodal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mode - Waterfall",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mode - Agile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode - Bimodal": {
+      "main": [
+        [
+          {
+            "node": "Project Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Project Context": {
+      "main": [
+        [
+          {
+            "node": "Stage 2 - WBS & Test Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 2 - WBS & Test Plan": {
+      "main": [
+        [
+          {
+            "node": "Has Budget?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - WBS": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stage 2 - WBS & Test Plan",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Budget?": {
+      "main": [
+        [
+          {
+            "node": "Budget - Top-Down",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Budget - Bottom-Up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Budget - Top-Down": {
+      "main": [
+        [
+          {
+            "node": "Stage 3 - Smart Budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 3 - Smart Budget": {
+      "main": [
+        [
+          {
+            "node": "Stage 4 - Risk & Change Control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Budget": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stage 3 - Smart Budget",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 4 - Risk & Change Control": {
+      "main": [
+        [
+          {
+            "node": "Stage 5 - Complete Reports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Risk": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stage 4 - Risk & Change Control",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Budget - Bottom-Up": {
+      "main": [
+        [
+          {
+            "node": "Stage 3 - Smart Budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode - Waterfall": {
+      "main": [
+        [
+          {
+            "node": "Project Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mode - Agile": {
+      "main": [
+        [
+          {
+            "node": "Project Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 5 - Complete Reports": {
+      "main": [
+        [
+          {
+            "node": "Assemble Final Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Complete Reports": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Stage 5 - Complete Reports",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "12dd9811-b99f-4e7c-9e30-5a7dacc737f7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7223dc5565ae8eb0946a8d75c7ecd2f7e00180e855ec4e08d0ab7e0333fcc02d"
+  },
+  "nodeGroups": [],
+  "id": "25gtDOHje1AsvTlm",
+  "tags": []
+}
