@@ -27,7 +27,12 @@ import {
   Eye,
   Bookmark,
   Search,
-  History
+  History,
+  User,
+  UserCheck,
+  LogOut,
+  Lock,
+  X
 } from 'lucide-react';
 
 const getApiBaseUrl = () => {
@@ -320,23 +325,67 @@ export default function App() {
   const [exportDropdown, setExportDropdown] = useState(null); // 'topbar' | 'report' | null
   const toggleExport = (id) => setExportDropdown((prev) => (prev === id ? null : id));
 
+  // User Authentication & Multi-Tenancy State
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const u = localStorage.getItem('projectpilot_user');
+      return u ? JSON.parse(u) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('projectpilot_token') || '');
+  const [guestId] = useState(() => {
+    let gid = localStorage.getItem('projectpilot_guest_id');
+    if (!gid) {
+      gid = 'guest_' + Math.random().toString(36).substring(2, 10);
+      localStorage.setItem('projectpilot_guest_id', gid);
+    }
+    return gid;
+  });
+
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authTab, setAuthTab] = useState('login'); // 'login' | 'register'
+  const [authForm, setAuthForm] = useState({ username: '', password: '', displayName: '' });
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+
+  // Helper to build headers with Authorization token or Guest ID
+  const getAuthHeaders = () => {
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-user-id': currentUser ? currentUser.id : guestId
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    return headers;
+  };
+
   // Saved Projects Persistence State
   const [savedProjects, setSavedProjects] = useState([]);
   const [searchHistory, setSearchHistory] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState(null);
 
-  // Load saved projects from backend / local storage
-  const loadSavedProjects = async () => {
+  // Load saved projects from backend filtered by authenticated user / guest device
+  const loadSavedProjects = async (overrideToken, overrideUserId) => {
     try {
-      const res = await fetch(`${API}/api/projects`);
+      const uid = overrideUserId || (currentUser ? currentUser.id : guestId);
+      const token = overrideToken !== undefined ? overrideToken : authToken;
+      const headers = { 'x-user-id': uid };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${API}/api/projects`, { headers });
       const data = await res.json();
       if (data.ok && Array.isArray(data.projects)) {
         setSavedProjects(data.projects);
-        localStorage.setItem('saved_budget_projects', JSON.stringify(data.projects));
+        localStorage.setItem(`saved_budget_projects_${uid}`, JSON.stringify(data.projects));
       }
     } catch {
-      const local = localStorage.getItem('saved_budget_projects');
+      const uid = overrideUserId || (currentUser ? currentUser.id : guestId);
+      const local = localStorage.getItem(`saved_budget_projects_${uid}`);
       if (local) {
         try { setSavedProjects(JSON.parse(local)); } catch {}
       }
@@ -345,14 +394,55 @@ export default function App() {
 
   useEffect(() => {
     loadSavedProjects();
-  }, []);
+  }, [currentUser, authToken]);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    const endpoint = authTab === 'login' ? '/api/auth/login' : '/api/auth/register';
+    try {
+      const res = await fetch(`${API}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authForm)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'การดำเนินการไม่สำเร็จ');
+      }
+
+      setCurrentUser(data.user);
+      setAuthToken(data.token);
+      localStorage.setItem('projectpilot_user', JSON.stringify(data.user));
+      localStorage.setItem('projectpilot_token', data.token);
+
+      setAuthModalOpen(false);
+      setAuthForm({ username: '', password: '', displayName: '' });
+      loadSavedProjects(data.token, data.user.id);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setAuthToken('');
+    localStorage.removeItem('projectpilot_user');
+    localStorage.removeItem('projectpilot_token');
+    setUserDropdownOpen(false);
+    loadSavedProjects('', guestId);
+  };
 
   const handleSaveCurrentProject = async () => {
     if (!report) return;
     try {
       const res = await fetch(`${API}/api/projects`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           id: currentProjectId,
           projectName: form.projectName,
@@ -381,7 +471,12 @@ export default function App() {
     if (e) e.stopPropagation();
     if (!window.confirm('คุณต้องการลบโครงการนี้ออกจากประวัติใช่หรือไม่?')) return;
     try {
-      await fetch(`${API}/api/projects/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/api/projects/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ลบไม่สำเร็จ');
       loadSavedProjects();
       if (currentProjectId === id) setCurrentProjectId(null);
     } catch (err) {
@@ -471,7 +566,7 @@ export default function App() {
     try {
       const response = await fetch(`${API}/api/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(form)
       });
       const data = await response.json();
@@ -823,11 +918,36 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
-          <span className="avatar">PM</span>
-          <div>
-            <strong>Project Workspace</strong>
-            <small>Dual Engine · Full-Stack</small>
+          <span className="avatar">
+            {currentUser ? (currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase() : 'PM'}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentUser ? currentUser.displayName || currentUser.username : 'ผู้เยี่ยมชม (Guest)'}
+            </strong>
+            <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentUser ? `@${currentUser.username} · ส่วนตัว` : 'ข้อมูลแยกเฉพาะเครื่องนี้'}
+            </small>
           </div>
+          {currentUser ? (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="sidebar-auth-action-btn"
+              title="ออกจากระบบ"
+            >
+              <LogOut size={15} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { setAuthTab('login'); setAuthModalOpen(true); }}
+              className="sidebar-auth-action-btn primary"
+              title="เข้าสู่ระบบ"
+            >
+              <UserCheck size={15} />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -861,6 +981,51 @@ export default function App() {
               </button>
               {exportDropdown === 'topbar' && renderExportMenu()}
             </div>
+
+            {/* User Account / Profile Control */}
+            {currentUser ? (
+              <div className="user-profile-container">
+                <button
+                  type="button"
+                  className="user-profile-btn"
+                  onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                  title="บัญชีของคุณ"
+                >
+                  <span className="user-avatar-circle">
+                    {(currentUser.displayName || currentUser.username).slice(0, 2).toUpperCase()}
+                  </span>
+                  <span className="user-name-label">{currentUser.displayName || currentUser.username}</span>
+                  <ChevronDown size={13} className={userDropdownOpen ? 'rotate-180' : ''} />
+                </button>
+                {userDropdownOpen && (
+                  <div className="user-menu-dropdown">
+                    <div className="user-menu-header">
+                      <strong>{currentUser.displayName || currentUser.username}</strong>
+                      <small>@{currentUser.username}</small>
+                    </div>
+                    <div className="user-menu-stat">
+                      <span>โครงการในบัญชี:</span>
+                      <strong>{savedProjects.length} โครงการ</strong>
+                    </div>
+                    <button className="user-logout-btn" onClick={handleLogout}>
+                      <LogOut size={14} /> ออกจากระบบ
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="guest-auth-container">
+                <button
+                  type="button"
+                  className="topbar-auth-btn"
+                  onClick={() => { setAuthTab('login'); setAuthModalOpen(true); }}
+                  title="เข้าสู่ระบบหรือสมัครสมาชิกเพื่อแยกข้อมูลโครงการส่วนตัว"
+                >
+                  <User size={14} />
+                  <span>เข้าสู่ระบบ / สมัคร</span>
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -1231,9 +1396,37 @@ export default function App() {
           <section className="history-container no-print">
             <div className="history-header-card">
               <div className="history-header-info">
-                <span className="step">PROJECT ARCHIVE</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span className="step">PROJECT ARCHIVE</span>
+                  {currentUser ? (
+                    <span className="badge badge-purple">
+                      <User size={12} style={{ marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} />
+                      บัญชี: {currentUser.displayName || currentUser.username}
+                    </span>
+                  ) : (
+                    <span className="badge badge-blue">
+                      โหมดผู้เยี่ยมชม (เฉพาะเครื่องนี้)
+                    </span>
+                  )}
+                </div>
                 <h2>ประวัติโครงการที่บันทึกไว้</h2>
-                <p>รวมรายงานการวิเคราะห์และแผนงบประมาณที่บันทึกไว้ทั้งหมด ({savedProjects.length} รายการ)</p>
+                <p>
+                  {currentUser
+                    ? `โครงการส่วนตัวของคุณ (${savedProjects.length} รายการ) — แยกข้อมูลเป็นส่วนตัว 100% ไม่ปะปนกับผู้ใช้อื่น`
+                    : `โครงการที่บันทึกไว้บนอุปกรณ์นี้ (${savedProjects.length} รายการ) — แยกเฉพาะอุปกรณ์นี้`}
+                </p>
+                {!currentUser && (
+                  <div className="history-guest-notice">
+                    <span>💡 ต้องการบันทึกถาวรและเปิดดูจากอุปกรณ์อื่นได้ด้วย?</span>
+                    <button
+                      type="button"
+                      className="history-guest-login-btn"
+                      onClick={() => { setAuthTab('register'); setAuthModalOpen(true); }}
+                    >
+                      สมัครสมาชิก / ล็อกอินฟรี
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="history-search-box">
@@ -1374,7 +1567,137 @@ export default function App() {
           </div>
           <span>ประวัติงาน</span>
         </button>
+
+        <button
+          type="button"
+          className="mobile-nav-btn"
+          onClick={() => {
+            if (currentUser) {
+              setUserDropdownOpen(!userDropdownOpen);
+            } else {
+              setAuthTab('login');
+              setAuthModalOpen(true);
+            }
+          }}
+        >
+          <User size={20} />
+          <span>{currentUser ? (currentUser.displayName || currentUser.username).slice(0, 5) : 'บัญชี'}</span>
+        </button>
       </nav>
+
+      {/* Authentication Modal Dialog */}
+      {authModalOpen && (
+        <div className="modal-backdrop" onClick={() => setAuthModalOpen(false)}>
+          <div className="auth-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="modal-close-btn"
+              onClick={() => setAuthModalOpen(false)}
+              title="ปิดหน้าต่าง"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="auth-modal-header">
+              <div className="brand-mark sm" style={{ margin: '0 auto 12px auto' }}>
+                <Sparkles size={18} />
+              </div>
+              <h2>{authTab === 'login' ? 'เข้าสู่ระบบ ProjectPilot' : 'สร้างบัญชีผู้ใช้งานใหม่'}</h2>
+              <p>แยกพื้นที่จัดเก็บและประวัติโครงการเป็นของคุณคนเดียว ปลอดภัย 100%</p>
+            </div>
+
+            <div className="auth-tabs">
+              <button
+                type="button"
+                className={`auth-tab-btn ${authTab === 'login' ? 'active' : ''}`}
+                onClick={() => { setAuthTab('login'); setAuthError(''); }}
+              >
+                เข้าสู่ระบบ (Login)
+              </button>
+              <button
+                type="button"
+                className={`auth-tab-btn ${authTab === 'register' ? 'active' : ''}`}
+                onClick={() => { setAuthTab('register'); setAuthError(''); }}
+              >
+                สมัครสมาชิก (Register)
+              </button>
+            </div>
+
+            {authError && (
+              <div className="auth-error-banner">
+                <ShieldAlert size={16} />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleAuthSubmit} className="auth-form">
+              {authTab === 'register' && (
+                <div className="form-group">
+                  <label>ชื่อที่ต้องการให้แสดง (Display Name)</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น อัษฎาวุฒิ หรือ Somchai P."
+                    value={authForm.displayName}
+                    onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
+                  />
+                </div>
+              )}
+
+              <div className="form-group">
+                <label>ชื่อผู้ใช้งาน (Username)</label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="เช่น user123 (ภาษาอังกฤษหรือตัวเลข)"
+                  value={authForm.username}
+                  onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>รหัสผ่าน (Password)</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="รหัสผ่านอย่างน้อย 4 ตัวอักษร"
+                  value={authForm.password}
+                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                />
+              </div>
+
+              <button type="submit" className="auth-submit-btn" disabled={authLoading}>
+                {authLoading ? (
+                  <>
+                    <LoaderCircle size={16} className="spin" /> กำลังดำเนินการ...
+                  </>
+                ) : authTab === 'login' ? (
+                  'เข้าสู่ระบบ'
+                ) : (
+                  'สร้างบัญชีและเข้าสู่ระบบ'
+                )}
+              </button>
+            </form>
+
+            <div className="auth-modal-footer">
+              <small>
+                {authTab === 'login' ? 'ยังไม่มีบัญชี? ' : 'มีบัญชีอยู่แล้ว? '}
+                <a
+                  href="#switch"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setAuthTab(authTab === 'login' ? 'register' : 'login');
+                    setAuthError('');
+                  }}
+                >
+                  {authTab === 'login' ? 'สมัครสมาชิกฟรีที่นี่' : 'คลิกเพื่อเข้าสู่ระบบ'}
+                </a>
+              </small>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

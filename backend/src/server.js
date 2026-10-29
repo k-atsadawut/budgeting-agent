@@ -11,6 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const AUTH_SECRET = process.env.AUTH_SECRET || 'projectpilot-secret-auth-key-2026';
 
 function getSavedProjects() {
   if (!fs.existsSync(PROJECTS_FILE)) return [];
@@ -28,6 +30,64 @@ function saveProjects(projects) {
   fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), 'utf8');
 }
 
+function getSavedUsers() {
+  if (!fs.existsSync(USERS_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveUsers(users) {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+}
+
+function hashPassword(password, salt) {
+  return crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+}
+
+function createToken(user) {
+  const payload = `${user.id}:${Date.now()}`;
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('hex');
+  return `${payload}:${sig}`;
+}
+
+function verifyToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split(':');
+  if (parts.length !== 3) return null;
+  const [userId, timestamp, sig] = parts;
+  const payload = `${userId}:${timestamp}`;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('hex');
+  if (sig !== expectedSig) return null;
+  const users = getSavedUsers();
+  return users.find((u) => u.id === userId) || null;
+}
+
+function getRequestUser(req) {
+  // 1. Check Bearer token or x-auth-token
+  const authHeader = req.headers.authorization || req.headers['x-auth-token'] || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (token) {
+    const user = verifyToken(token);
+    if (user) {
+      return { id: user.id, username: user.username, displayName: user.displayName, isGuest: false };
+    }
+  }
+
+  // 2. Fallback to Guest/Device ID from header or query
+  const guestId = (req.headers['x-user-id'] || req.query?.userId || '').trim();
+  if (guestId) {
+    return { id: guestId, username: 'guest', displayName: 'ผู้เยี่ยมชม (อุปกรณ์นี้)', isGuest: true };
+  }
+
+  return { id: 'guest_default', username: 'guest', displayName: 'ผู้เยี่ยมชม', isGuest: true };
+}
+
 const app = express();
 const port = Number(process.env.PORT || 3001);
 
@@ -40,13 +100,104 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'universal-project-agent-api', timestamp: new Date().toISOString() });
 });
 
-// Project Persistence CRUD Endpoints
-app.get('/api/projects', (_req, res) => {
-  const projects = getSavedProjects();
-  res.json({ ok: true, projects });
+// Authentication Endpoints
+app.post('/api/auth/register', (req, res) => {
+  const { username, password, displayName } = req.body || {};
+  const cleanUsername = (username || '').trim().toLowerCase();
+  const cleanPassword = (password || '').trim();
+  const cleanDisplayName = (displayName || '').trim() || cleanUsername;
+
+  if (!cleanUsername || cleanUsername.length < 3) {
+    return res.status(400).json({ error: 'ชื่อผู้ใช้งานต้องมีความยาวอย่างน้อย 3 ตัวอักษร' });
+  }
+  if (!cleanPassword || cleanPassword.length < 4) {
+    return res.status(400).json({ error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 4 ตัวอักษร' });
+  }
+
+  const users = getSavedUsers();
+  if (users.some((u) => u.username.toLowerCase() === cleanUsername)) {
+    return res.status(409).json({ error: 'ชื่อผู้ใช้งานนี้มีอยู่ในระบบแล้ว กรุณาเลือกชื่ออื่น' });
+  }
+
+  const salt = crypto.randomBytes(16).toString('hex');
+  const passwordHash = hashPassword(cleanPassword, salt);
+  const newUser = {
+    id: 'usr_' + crypto.randomUUID().slice(0, 8),
+    username: cleanUsername,
+    displayName: cleanDisplayName,
+    salt,
+    passwordHash,
+    createdAt: new Date().toISOString()
+  };
+
+  users.push(newUser);
+  saveUsers(users);
+
+  const token = createToken(newUser);
+  res.json({
+    ok: true,
+    message: 'สมัครสมาชิกสำเร็จ',
+    user: { id: newUser.id, username: newUser.username, displayName: newUser.displayName },
+    token
+  });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const cleanUsername = (username || '').trim().toLowerCase();
+  const cleanPassword = (password || '').trim();
+
+  if (!cleanUsername || !cleanPassword) {
+    return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน' });
+  }
+
+  const users = getSavedUsers();
+  const user = users.find((u) => u.username.toLowerCase() === cleanUsername);
+  if (!user) {
+    return res.status(401).json({ error: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง' });
+  }
+
+  const hash = hashPassword(cleanPassword, user.salt);
+  if (hash !== user.passwordHash) {
+    return res.status(401).json({ error: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง' });
+  }
+
+  const token = createToken(user);
+  res.json({
+    ok: true,
+    message: 'เข้าสู่ระบบสำเร็จ',
+    user: { id: user.id, username: user.username, displayName: user.displayName },
+    token
+  });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const reqUser = getRequestUser(req);
+  if (reqUser.isGuest) {
+    return res.json({ ok: true, user: null, isGuest: true, guestId: reqUser.id });
+  }
+  res.json({ ok: true, user: reqUser, isGuest: false });
+});
+
+// Project Persistence CRUD Endpoints with User Data Isolation
+app.get('/api/projects', (req, res) => {
+  const reqUser = getRequestUser(req);
+  const allProjects = getSavedProjects();
+
+  // Filter projects belonging strictly to this user or guest
+  const userProjects = allProjects.filter((p) => {
+    if (!p.userId) {
+      // Legacy project: show only to guests so they don't leak into new registered accounts
+      return reqUser.isGuest;
+    }
+    return p.userId === reqUser.id;
+  });
+
+  res.json({ ok: true, projects: userProjects, user: reqUser });
 });
 
 app.post('/api/projects', (req, res) => {
+  const reqUser = getRequestUser(req);
   const { projectName, projectType, description, budget, timeline, qualityTier, report, engineUsed, id } = req.body || {};
   if (!projectName?.trim() || !report?.trim()) {
     return res.status(400).json({ error: 'ต้องการชื่อโครงการและเนื้อหารายงาน' });
@@ -56,8 +207,19 @@ app.post('/api/projects', (req, res) => {
   const projectId = id || crypto.randomUUID();
   const existingIdx = projects.findIndex((p) => p.id === projectId);
 
+  // If modifying an existing project, verify ownership
+  if (existingIdx >= 0) {
+    const existing = projects[existingIdx];
+    if (existing.userId && existing.userId !== reqUser.id) {
+      return res.status(403).json({ error: 'คุณไม่มีสิทธิ์แก้ไขโครงการของผู้อื่น' });
+    }
+  }
+
   const projectRecord = {
     id: projectId,
+    userId: reqUser.id,
+    createdBy: reqUser.displayName || reqUser.username,
+    isGuest: reqUser.isGuest,
     projectName: projectName.trim(),
     projectType: projectType || 'ทั่วไป',
     description: (description || '').trim(),
@@ -81,19 +243,27 @@ app.post('/api/projects', (req, res) => {
 });
 
 app.get('/api/projects/:id', (req, res) => {
+  const reqUser = getRequestUser(req);
   const projects = getSavedProjects();
   const found = projects.find((p) => p.id === req.params.id);
   if (!found) return res.status(404).json({ error: 'ไม่พบโครงการนี้' });
+  if (found.userId && found.userId !== reqUser.id) {
+    return res.status(403).json({ error: 'คุณไม่มีสิทธิ์เข้าถึงโครงการนี้' });
+  }
   res.json({ ok: true, project: found });
 });
 
 app.delete('/api/projects/:id', (req, res) => {
+  const reqUser = getRequestUser(req);
   let projects = getSavedProjects();
-  const initialLength = projects.length;
-  projects = projects.filter((p) => p.id !== req.params.id);
-  if (projects.length === initialLength) {
+  const target = projects.find((p) => p.id === req.params.id);
+  if (!target) {
     return res.status(404).json({ error: 'ไม่พบโครงการที่ต้องการลบ' });
   }
+  if (target.userId && target.userId !== reqUser.id) {
+    return res.status(403).json({ error: 'คุณไม่มีสิทธิ์ลบโครงการของผู้ใช้อื่น' });
+  }
+  projects = projects.filter((p) => p.id !== req.params.id);
   saveProjects(projects);
   res.json({ ok: true, message: 'ลบโครงการเรียบร้อยแล้ว' });
 });
@@ -380,12 +550,16 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: `ไม่รู้จัก engine: ${targetEngine}` });
     }
 
-    // Auto-save to persistent history
+    // Auto-save to persistent history with user isolation
     let savedProject = null;
     try {
+      const reqUser = getRequestUser(req);
       const projects = getSavedProjects();
       savedProject = {
         id: crypto.randomUUID(),
+        userId: reqUser.id,
+        createdBy: reqUser.displayName || reqUser.username,
+        isGuest: reqUser.isGuest,
         projectName: payload.projectName,
         projectType: payload.projectType,
         description: payload.description,
