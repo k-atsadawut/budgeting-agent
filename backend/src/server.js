@@ -603,4 +603,5 @@ if (fs.existsSync(FRONTEND_DIST)) {
   });
 }
 
-app.listen(port, () => console.log(`Project Pilot API listening at http://localhost:${port}`));
+const host = '0.0.0.0';
+app.listen(port, host, () => console.log(`Project Pilot API listening on http://${host}:${port}`));

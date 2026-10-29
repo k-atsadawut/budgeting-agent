@@ -5,7 +5,7 @@
   "description": "Universal Project Analyzer & Smart Budgeting Agent",
   "scripts": {
     "build": "npm --prefix frontend install && npm --prefix frontend run build && npm --prefix backend install",
-    "start": "npm --prefix backend start",
+    "start": "node backend/src/server.js",
     "dev": "npm --prefix backend run dev",
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev"
